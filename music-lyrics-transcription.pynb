@@ -1,5 +1,6 @@
 import streamlit as st
 import sounddevice as sd
+import numpy as np
 import wave
 import tempfile
 import os
@@ -8,7 +9,6 @@ import requests
 import re
 import statistics
 from collections import Counter
-import json
 
 
 
@@ -85,6 +85,7 @@ def group_text(tokens,L):
         results.append(word_groups)
     return results
     
+
 def get_track_ids_from_lyrics(lyric, keys):   
     # suppose the lyric as L words. Search for the entire lyric (after a little bit of cleaning.) If there are no results, search
     # for the first L-1 words, and the last L-1 words. If no results, search in chunks of L-2 words, etc. After you find one result, search again
@@ -110,9 +111,8 @@ def get_track_ids_from_lyrics(lyric, keys):
                     # if we have at least one result, our search is complete after the for loop finished
                     search_complete = True
                     local_song_list = results['message']['body']['track_list']
-                    # total_song_list = total_song_list + local_song_list 
+                    total_song_list = total_song_list + local_song_list 
                     for j in range(len(local_song_list)):
-                        total_song_list.append(local_song_list[j]['track'])
                         track_ids.append(local_song_list[j]['track']['track_id'])
                     
             # after we finish the for loop, if we got matches, exit the while-loop. Otherwise, check to see if we are searching single words now. If so, we are done.
@@ -123,9 +123,10 @@ def get_track_ids_from_lyrics(lyric, keys):
             
             length = length-1
 
-        # for good measure, we will search again, assuming our length > 1. This is to improve the search results, now that we have at least one.     
+        # for good measure, we will search a few more times, assuming our length > 1. This is to improve the search results, now that we have at least one.     
 
-        if length>1:
+
+        while length>6:
             length=length-1
             lyric_attempts = group_text(lyric,length)
             for k in range(len(lyric_attempts)):
@@ -134,9 +135,11 @@ def get_track_ids_from_lyrics(lyric, keys):
                     break  
                 elif len(results['message']['body']['track_list'])!=0:
                     local_song_list = results['message']['body']['track_list']
+                    total_song_list = total_song_list + local_song_list
                     for j in range(len(local_song_list)):
-                        total_song_list.append(local_song_list[j]['track'])
                         track_ids.append(local_song_list[j]['track']['track_id'])
+            
+
         
         # it is possible we had successful searches but empty search results. This will result in track_ids == [].
         if len(track_ids)==0:
@@ -149,80 +152,67 @@ def get_track_ids_from_lyrics(lyric, keys):
             
             #      the conditions would be:
             #1st, 2nd most popular of all songs:  
-            #(a)   song for song in total_song_list if song['track_id'] in top_one_ids_all
-            #(b)   song for song in total_song_list if song['track_id'] in top_two_ids_all
+            #(a)   song for song in total_song_list if song['track']['track_id'] in top_one_ids_all
+            #(b)   song for song in total_song_list if song['track']['track_id'] in top_two_ids_all
 
             #1st, 2nd most popular of all mid songs:
-            #(c)   song for song in total_song_list if song['track_id'] in top_one_ids_mid
-            #(d)   song for song in total_song_list if song['track_id'] in top_two_ids_mid
+            #(c)   song for song in total_song_list if song['track']['track_id'] in top_one_ids_mid
+            #(d)   song for song in total_song_list if song['track']['track_id'] in top_two_ids_mid
 
             #1st, 2nd most popular of all songs, as long as they are at least mid 
-            #(e)   song for song in total_song_list if song['track_id'] in top_one_ids_all and song['track_rating']>= mid_popular
-            #(f)   song for song in total_song_list if song['track_id'] in top_two_ids_all and song['track_rating']>= mid_popular
+            #(e)   song for song in total_song_list if song['track']['track_id'] in top_one_ids_all and song['track']['track_rating']>= mid_popular
+            #(f)   song for song in total_song_list if song['track']['track_id'] in top_two_ids_all and song['track']['track_rating']>= mid_popular
 
             #experiments show a,c,e are bad results.  Note that f is a subset of d .  
             # The logic we will choose is:  try f. If empty, try d.
 
 
-            # songs_list is a list of dictionaries with duplicates. We want the list of unique song dictionaries.
-            total_song_list_unique = [json.loads(item) for item in {json.dumps(d, sort_keys=True) for d in total_song_list}]
-
-
-            # get the rating for each unique song
-            ratings = [x['track_rating'] for x in total_song_list_unique]
-            
-            # this rating lets us get the median rating
+            ratings = [x['track']['track_rating'] for x in total_song_list]
             mid_popular = statistics.median((ratings))
+            mid_song_ids = [x['track']['track_id'] for x in total_song_list if x['track']['track_rating'] >= mid_popular]
 
-            # these are the ids of tracks which have at least median rating
-            mid_song_ids = [x['track_id'] for x in total_song_list if x['track_rating'] >= mid_popular]            
-        
-            # we want to find out how many times a track pops up in our total_song_list.  The more times the more likely that's our match.
             frequency_all = Counter(track_ids)
-
-            # the below code is to get the second highest frequency, i.e. the songs with the second-most results.
-            frequencies_all_unique = sorted(set(frequency_all.values()), reverse=True)
-            top_frequency_all = frequencies_all_unique[0]
-            if len(frequencies_all_unique) >1:
-                second_frequency_all = frequencies_all_unique[1]
+            unique_frequencies_all = sorted(set(frequency_all.values()), reverse=True)
+            top_frequency_all = unique_frequencies_all[0]
+            if len(unique_frequencies_all) >1:
+                second_frequency_all = unique_frequencies_all[1]
             else: 
                 second_frequency_all = top_frequency_all  
 
-            # get the second highest frequency of the songs which are at least mid-popular
             frequency_mid = Counter(mid_song_ids)
-            frequencies_mid_unique = sorted(set(frequency_mid.values()), reverse=True)
-            top_frequency_mid = frequencies_mid_unique[0]
-            if len(frequencies_mid_unique) >1:
-                second_frequency_mid = frequencies_mid_unique[1]
+            unique_frequencies_mid = sorted(set(frequency_mid.values()), reverse=True)
+            top_frequency_mid = unique_frequencies_mid[0]
+            if len(unique_frequencies_mid) >1:
+                second_frequency_mid = unique_frequencies_mid[1]
             else: 
                 second_frequency_mid = top_frequency_mid
             
-            # get the ids of those songs which were at least the second-most results, among all songs and among mid-popular songs
+            top_one_ids_all = [item for item, count in frequency_all.items() if count >= top_frequency_all] 
             top_two_ids_all = [item for item, count in frequency_all.items() if count >= second_frequency_all]
+ 
+            top_one_ids_mid = [item for item, count in frequency_mid.items() if count >= top_frequency_mid] 
             top_two_ids_mid = [item for item, count in frequency_mid.items() if count >= second_frequency_mid]    
            
-            ## top_one_ids_all = [item for item, count in frequency_all.items() if count >= top_frequency_all] 
-            ## top_one_ids_mid = [item for item, count in frequency_mid.items() if count >= top_frequency_mid]
+
             
 
-            # get the song dictionaries of those unique songs if their track is in among the top-two selected of all songs and are at least 
-            # mid-popular; sort my reverse popularity (track rating).
             sorted_songs = sorted(
-                ( song for song in total_song_list_unique if song['track_id'] in top_two_ids_all and song['track_rating']>= mid_popular), 
-                key = lambda x: x['track_rating'], reverse=True )
-            #if the above yields no results, loosen the criteria
+                ( song for song in total_song_list if song['track']['track_id'] in top_two_ids_all and song['track']['track_rating']>= mid_popular), 
+                key = lambda x: x['track']['track_rating'], reverse=True )
+            
             if len(sorted_songs)==0:
                 sorted_songs= sorted(
-                    ( song for song in total_song_list_unique if song['track_id'] in top_two_ids_mid), 
-                    key = lambda x: x['track_rating'], reverse=True )
+                    ( song for song in total_song_list if song['track']['track_id'] in top_two_ids_mid), 
+                    key = lambda x: x['track']['track_rating'], reverse=True )
+
     
-            sorted_song_list = [song['track_id'] for song in sorted_songs][0:10]
+            sorted_song_list = [song['track']['track_id'] for song in sorted_songs][0:10]
             return sorted_song_list
 
 
 def get_song_info_from_track_ids(track_ids, keys):
     # Input is a list of track ids.  Output should be a list of dictionaries.  
-    # Each dictionary contains information like artist, album, song title, lyrics, etc. corresponding to that track id.
+    # Each dictionay contains information like artist, album, song title, lyrics, etc. corresponding to that track id.
     results =[]
     if isinstance(track_ids, (int,float)): #if track_ids is just a number, than it is an error status code
         track_info=''
@@ -240,7 +230,7 @@ def get_song_info_from_track_ids(track_ids, keys):
     else:
         for k in range(len(track_ids)):
             data = request_musixmatch(track_ids[k],'track',keys)
-            if not isinstance(data,(int,float)): #if we didn't get an error code from request_musixmatch
+            if not isinstance(data,(int,float)): #if we didnt get an error code from request_musixmatch
                 if 'message' in data and 'body' in data['message'] and 'track' in data['message']['body']:
                     track_info = data['message']['body']['track']
                     artist_name = track_info['artist_name']
@@ -342,9 +332,7 @@ def main():
             ### Project Explanation
             This project allows users to record audio, transcribe lyrics, and search for song information 
             based on the transcription. You can record up to 10 seconds of audio, and the app will 
-            attempt to match the lyrics to popular songs. 
-            
-            The lyrics are transcribed by Assembly AI, 
+            attempt to match the lyrics to popular songs. The lyrics are transcribed by Assembly AI, 
             the words are matched to songs using the Musix Match database, and the user interface is done with Streamlit.
            """
         )
@@ -425,7 +413,7 @@ def main():
             if song_options[0]['status_code']==0:
                 st.write("Sorry! Musixmatch couldn\'t find any lyrics matching your transcript. Want to try again?")
             elif not (song_options[0]['status_code']==200):
-                st.write("Sorry, something went wrong. We were unable to retrieve results from the Musixmatch service.")
+                st.write("Sorry, something went wrong. We were unable to retreive results from the Musixmatch service.")
             else:   
                 # Divide the layout into two columns
                 cola, colb = st.columns(2)

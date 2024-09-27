@@ -1,0 +1,4 @@
+streamlit
+sounddevice
+assemblyai
+requests
